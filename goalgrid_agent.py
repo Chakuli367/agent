@@ -6,11 +6,13 @@ from google.cloud import firestore
 from google.oauth2 import service_account
 from groq import Groq
 
-# ===== FIRESTORE SETUP =====
-SERVICE_ACCOUNT_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-if not SERVICE_ACCOUNT_PATH:
-    raise ValueError("Environment variable GOOGLE_APPLICATION_CREDENTIALS is not set.")
-credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH)
+# ===== FIRESTORE SETUP (using JSON env variable) =====
+creds_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+if not creds_json:
+    raise ValueError("Environment variable GOOGLE_APPLICATION_CREDENTIALS_JSON is not set.")
+
+credentials_info = json.loads(creds_json)
+credentials = service_account.Credentials.from_service_account_info(credentials_info)
 db = firestore.Client(credentials=credentials)
 
 # ===== GROQ SETUP =====
@@ -18,6 +20,7 @@ GROQ_API_KEY = os.environ.get("GSK_API_KEY")
 if not GROQ_API_KEY:
     raise ValueError("Environment variable GSK_API_KEY is not set.")
 groq_client = Groq(api_key=GROQ_API_KEY)
+
 
 # ===== DATA MODELS =====
 class Task:
