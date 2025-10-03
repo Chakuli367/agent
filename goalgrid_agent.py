@@ -7,13 +7,17 @@ from google.oauth2 import service_account
 from groq import Groq
 
 # ===== FIRESTORE SETUP =====
-SERVICE_ACCOUNT_PATH = "goalgrid.json"
+SERVICE_ACCOUNT_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+if not SERVICE_ACCOUNT_PATH:
+    raise ValueError("Environment variable GOOGLE_APPLICATION_CREDENTIALS is not set.")
 credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH)
 db = firestore.Client(credentials=credentials)
 
 # ===== GROQ SETUP =====
-os.environ["GSK_API_KEY"] = "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"
-groq_client = Groq(api_key=os.environ.get("GSK_API_KEY"))
+GROQ_API_KEY = os.environ.get("GSK_API_KEY")
+if not GROQ_API_KEY:
+    raise ValueError("Environment variable GSK_API_KEY is not set.")
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 # ===== DATA MODELS =====
 class Task:
@@ -72,7 +76,6 @@ class GoalGridAgent:
             return default_data
 
     def save_course(self, lessons: List[Lesson]):
-        """Saves a list of lessons as a dated_courses document with random ID."""
         doc_ref = self.dated_courses_ref.document()
         content = {
             "joined_date": datetime.now().date().isoformat(),
@@ -83,7 +86,6 @@ class GoalGridAgent:
         print(f"Course saved successfully at users/{self.user_id}/dated_courses/{doc_ref.id}")
 
     def get_active_course(self):
-        """Fetch the most recent course document."""
         if self.active_course_doc:
             return self.active_course_doc.get().to_dict().get("content", {})
         docs = list(self.dated_courses_ref.stream())
@@ -153,7 +155,6 @@ Return JSON with keys: title, lesson, summary, motivation, quote, secret_hacks_a
             visual_infographic_html=content["visual_infographic_html"],
             tasks=[]
         )
-        # Save to Firestore
         course_content = self.get_active_course()
         lessons = course_content.get("lessons_by_date", {})
         lessons[today_str] = lesson.to_dict()
@@ -169,7 +170,6 @@ Return JSON with keys: title, lesson, summary, motivation, quote, secret_hacks_a
             )
             lesson.tasks.append(t.to_dict())
             tasks.append(t)
-        # Update Firestore
         course_content = self.get_active_course()
         lessons = course_content.get("lessons_by_date", {})
         lessons[lesson.date] = lesson.to_dict()
@@ -279,25 +279,3 @@ Return JSON: list of task descriptions only.
         except Exception as e:
             print(f"Failed to summarize lesson: {e}")
             return None
-
-# ====== TEST USAGE ======
-if __name__ == "__main__":
-    agent = GoalGridAgent("user_456")
-
-    # Create lesson and tasks
-    lesson = agent.create_daily_lesson({"recent_progress": "Started yesterday"})
-    agent.generate_tasks_for_lesson(lesson)
-
-    # Regenerate tasks
-    today_str = datetime.now().date().isoformat()
-    agent.regenerate_tasks_with_ai(today_str, difficulty_instructions="Make these tasks simpler and easier to complete")
-
-    # Fetch today's tasks
-    todays_tasks = agent.get_todays_tasks()
-    print("\nToday's Tasks:")
-    for t in todays_tasks:
-        print(f"- {t['task']['task']}")
-
-    # Summarize today's lesson
-    summary = agent.summarize_todays_lesson()
-    print("\nLesson Summary:", summary)
