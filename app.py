@@ -1,7 +1,7 @@
 # app.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from goalgrid_agent import GoalGridAgent
+from goalgrid_agent import GoalGridAgent, Lesson
 from datetime import datetime
 
 app = Flask(__name__)
