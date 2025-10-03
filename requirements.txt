@@ -1,4 +1,4 @@
 google-cloud-firestore>=2.21.0,<3.0
 google-auth==2.23.0
-groq==1.0.0  # Replace with actual latest version if different
+groq>=0.32.0,<1.0
 flask==2.3.4  # if you want to expose an API
