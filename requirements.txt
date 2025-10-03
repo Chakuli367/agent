@@ -4,3 +4,4 @@ groq>=0.32.0,<1.0
 flask>=2.3.0,<3.0
 requests>=2.31.0
 gunicorn>=21.2,<22.0
+flask-cors==4.0.0
