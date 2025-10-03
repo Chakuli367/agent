@@ -7,14 +7,11 @@ from google.oauth2 import service_account
 from groq import Groq
 
 # ===== FIRESTORE SETUP =====
-SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
-if not SERVICE_ACCOUNT_JSON:
-    raise ValueError("Environment variable GOOGLE_APPLICATION_CREDENTIALS_JSON is not set.")
-
-# Load credentials from JSON string in env var
-service_account_info = json.loads(SERVICE_ACCOUNT_JSON)
-credentials = service_account.Credentials.from_service_account_info(service_account_info)
-db = firestore.Client(credentials=credentials, project=service_account_info.get("project_id"))
+SERVICE_ACCOUNT_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+if not SERVICE_ACCOUNT_PATH:
+    raise ValueError("Environment variable GOOGLE_APPLICATION_CREDENTIALS is not set.")
+credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH)
+db = firestore.Client(credentials=credentials)
 
 # ===== GROQ SETUP =====
 GROQ_API_KEY = os.environ.get("GSK_API_KEY")
@@ -106,6 +103,12 @@ class GoalGridAgent:
         content["lessons_by_date"] = lessons_by_date
         self.active_course_doc.set({"content": content})
         print("Course content updated.")
+
+    # ---------- FETCH LESSON BY DATE ----------
+    def get_lesson(self, date: str) -> dict:
+        course_content = self.get_active_course()
+        lessons = course_content.get("lessons_by_date", {})
+        return lessons.get(date)
 
     # ---------- CONTENT GENERATION ----------
     def generate_personalized_content(self, context: Dict[str, Any]) -> Dict[str, str]:
