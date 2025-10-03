@@ -1,9 +1,11 @@
 # app.py
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from goalgrid_agent import GoalGridAgent
 from datetime import datetime
 
 app = Flask(__name__)
+CORS(app)  # Allow cross-origin requests (needed for Render frontend)
 
 # ---------- Helper to initialize agent ----------
 def get_agent(user_id: str):
@@ -13,7 +15,7 @@ def get_agent(user_id: str):
 
 @app.route("/create_lesson", methods=["POST"])
 def create_lesson():
-    data = request.json or {}
+    data = request.get_json(force=True)
     user_id = data.get("user_id")
     context = data.get("context", {})
     if not user_id:
@@ -25,7 +27,7 @@ def create_lesson():
 
 @app.route("/generate_tasks", methods=["POST"])
 def generate_tasks():
-    data = request.json or {}
+    data = request.get_json(force=True)
     user_id = data.get("user_id")
     num_tasks = data.get("num_tasks", 3)
     date = data.get("date")
@@ -38,14 +40,14 @@ def generate_tasks():
         return jsonify({"error": "Lesson not found"}), 404
 
     # Reconstruct Lesson object from saved data
-    lesson = agent.create_daily_lesson()  # placeholder to get Lesson type
+    lesson = agent.create_daily_lesson()  # placeholder for type
     lesson.__dict__.update(lesson_data)
     tasks = agent.generate_tasks_for_lesson(lesson, num_tasks)
     return jsonify({"message": "Tasks generated", "tasks": [t.to_dict() for t in tasks]})
 
 @app.route("/regenerate_tasks", methods=["POST"])
 def regenerate_tasks():
-    data = request.json or {}
+    data = request.get_json(force=True)
     user_id = data.get("user_id")
     date = data.get("date")
     instructions = data.get("instructions", "Simplify these tasks for a beginner")
@@ -74,14 +76,24 @@ def summarize_lesson():
         return jsonify({"error": "user_id is required"}), 400
 
     agent = get_agent(user_id)
-    summary = agent.summarize_todays_lesson() if date == datetime.now().date().isoformat() else None
+    if date == datetime.now().date().isoformat():
+        summary = agent.summarize_todays_lesson()
+    else:
+        lesson_data = agent.get_lesson(date)
+        summary = lesson_data.get("summary") if lesson_data else None
     return jsonify({"summary": summary})
 
 @app.route("/all_users", methods=["GET"])
 def all_users():
     agent = get_agent("dummy")  # Just to access the class method
-    users = agent.get_all_users()
-    return jsonify(users)
+    agent.get_all_users()  # Prints to console
+    return jsonify({"message": "Check console for all users"})
 
+# ---------- Health check ----------
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"})
+
+# ---------- Main ----------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=5000, debug=True)
