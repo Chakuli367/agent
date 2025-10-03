@@ -6,12 +6,17 @@ from google.cloud import firestore
 from groq import Groq
 
 # ===== FIRESTORE SETUP =====
-SERVICE_ACCOUNT_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-if not SERVICE_ACCOUNT_PATH:
-    raise ValueError("Environment variable GOOGLE_APPLICATION_CREDENTIALS is not set.")
+# Load service account from environment variable
+SERVICE_ACCOUNT_JSON = os.environ.get("GOALGRID_SA_JSON")
+if not SERVICE_ACCOUNT_JSON:
+    raise ValueError("Environment variable GOALGRID_SA_JSON is not set!")
 
-credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH)
-db = firestore.Client(credentials=credentials)
+credentials = service_account.Credentials.from_service_account_info(
+    json.loads(SERVICE_ACCOUNT_JSON)
+)
+
+# Initialize Firestore client
+db = firestore.Client(credentials=credentials, project=credentials.project_id)
 
 # ===== GROQ SETUP =====
 GROQ_API_KEY = os.environ.get("GSK_API_KEY")
