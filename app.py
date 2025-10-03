@@ -1,113 +1,87 @@
-from flask import Flask, request, jsonify, abort
-from goalgrid_agent import GoalGridAgent, Lesson, Task
+# app.py
+from flask import Flask, request, jsonify
+from goalgrid_agent import GoalGridAgent
 from datetime import datetime
 
 app = Flask(__name__)
 
-# ===== REQUEST HELPERS =====
-def parse_context(data):
-    return data.get("recent_progress", None)
+# ---------- Helper to initialize agent ----------
+def get_agent(user_id: str):
+    return GoalGridAgent(user_id)
 
-def parse_difficulty(data):
-    return data.get("difficulty_instructions", "Make these tasks simpler and easier to complete for a beginner")
+# ---------- Endpoints ----------
 
-# ===== ENDPOINTS =====
+@app.route("/create_lesson", methods=["POST"])
+def create_lesson():
+    data = request.json or {}
+    user_id = data.get("user_id")
+    context = data.get("context", {})
+    if not user_id:
+        return jsonify({"error": "user_id is required"}), 400
 
-@app.route("/", methods=["GET"])
-def root():
-    return jsonify({"status": "GoalGrid Backend is running!"})
+    agent = get_agent(user_id)
+    lesson = agent.create_daily_lesson(context)
+    return jsonify({"message": "Lesson created", "lesson": lesson.__dict__})
 
-# ---------- User Helpers ----------
-@app.route("/user/<user_id>", methods=["GET"])
-def get_user(user_id):
-    agent = GoalGridAgent(user_id)
-    return jsonify(agent.get_user_data())
+@app.route("/generate_tasks", methods=["POST"])
+def generate_tasks():
+    data = request.json or {}
+    user_id = data.get("user_id")
+    num_tasks = data.get("num_tasks", 3)
+    date = data.get("date")
+    if not user_id or not date:
+        return jsonify({"error": "user_id and date are required"}), 400
 
-@app.route("/users", methods=["GET"])
-def get_all_users():
-    agent = GoalGridAgent("dummy")  # user_id not needed
-    users = [d for d in agent.get_all_users()]
-    return jsonify({"users": users})
+    agent = get_agent(user_id)
+    lesson_data = agent.get_lesson(date)
+    if not lesson_data:
+        return jsonify({"error": "Lesson not found"}), 404
 
-# ---------- Lesson Endpoints ----------
-@app.route("/lesson/create/<user_id>", methods=["POST"])
-def create_lesson(user_id):
-    data = request.get_json() or {}
-    context = parse_context(data)
-    agent = GoalGridAgent(user_id)
-    lesson = agent.create_daily_lesson({"recent_progress": context})
-    return jsonify(lesson.to_dict())
+    # Reconstruct Lesson object from saved data
+    lesson = agent.create_daily_lesson()  # placeholder to get Lesson type
+    lesson.__dict__.update(lesson_data)
+    tasks = agent.generate_tasks_for_lesson(lesson, num_tasks)
+    return jsonify({"message": "Tasks generated", "tasks": [t.to_dict() for t in tasks]})
 
-@app.route("/lesson/<user_id>/<date>", methods=["GET"])
-def get_lesson(user_id, date):
-    agent = GoalGridAgent(user_id)
-    lesson = agent.get_lesson(date)
-    if lesson:
-        return jsonify(lesson)
-    else:
-        abort(404, description="Lesson not found")
+@app.route("/regenerate_tasks", methods=["POST"])
+def regenerate_tasks():
+    data = request.json or {}
+    user_id = data.get("user_id")
+    date = data.get("date")
+    instructions = data.get("instructions", "Simplify these tasks for a beginner")
+    if not user_id or not date:
+        return jsonify({"error": "user_id and date are required"}), 400
 
-@app.route("/lesson/regenerate/<user_id>/<date>", methods=["POST"])
-def regenerate_lesson(user_id, date):
-    data = request.get_json() or {}
-    difficulty_instructions = parse_difficulty(data)
-    agent = GoalGridAgent(user_id)
-    success = agent.regenerate_lesson_with_easier_tasks(date, difficulty_instructions=difficulty_instructions)
-    if success:
-        return jsonify({"status": "Lesson regenerated successfully"})
-    else:
-        abort(400, description="Failed to regenerate lesson")
+    agent = get_agent(user_id)
+    success = agent.regenerate_tasks_with_ai(date, instructions)
+    return jsonify({"success": success})
 
-# ---------- Task Endpoints ----------
-@app.route("/tasks/generate/<user_id>", methods=["POST"])
-def generate_tasks(user_id):
-    agent = GoalGridAgent(user_id)
-    lesson = agent.create_daily_lesson({})
-    tasks = agent.generate_tasks_for_lesson(lesson)
-    return jsonify({"tasks": [t.to_dict() for t in tasks]})
+@app.route("/todays_tasks", methods=["GET"])
+def todays_tasks():
+    user_id = request.args.get("user_id")
+    if not user_id:
+        return jsonify({"error": "user_id is required"}), 400
 
-@app.route("/tasks/regenerate/<user_id>/<date>", methods=["POST"])
-def regenerate_tasks(user_id, date):
-    data = request.get_json() or {}
-    difficulty_instructions = parse_difficulty(data)
-    agent = GoalGridAgent(user_id)
-    success = agent.regenerate_tasks_with_ai(date, difficulty_instructions)
-    if success:
-        return jsonify({"status": "Tasks regenerated successfully"})
-    else:
-        abort(400, description="Failed to regenerate tasks")
-
-@app.route("/tasks/today/<user_id>", methods=["GET"])
-def get_todays_tasks(user_id):
-    agent = GoalGridAgent(user_id)
-    tasks = agent.fetch_todays_tasks()
+    agent = get_agent(user_id)
+    tasks = agent.get_todays_tasks()
     return jsonify({"tasks": tasks})
 
-@app.route("/tasks/summarize/<user_id>", methods=["GET"])
-def summarize_tasks(user_id):
-    agent = GoalGridAgent(user_id)
-    summary = agent.summarize_todays_tasks()
+@app.route("/summarize_lesson", methods=["GET"])
+def summarize_lesson():
+    user_id = request.args.get("user_id")
+    date = request.args.get("date", datetime.now().date().isoformat())
+    if not user_id:
+        return jsonify({"error": "user_id is required"}), 400
+
+    agent = get_agent(user_id)
+    summary = agent.summarize_todays_lesson() if date == datetime.now().date().isoformat() else None
     return jsonify({"summary": summary})
 
-# ---------- Firestore Utility Endpoints ----------
-@app.route("/firestore/all_users", methods=["GET"])
-def firestore_all_users():
-    agent = GoalGridAgent("dummy")
-    return jsonify(agent.get_all_users())
-
-@app.route("/firestore/lesson_content/<user_id>/<date>", methods=["GET"])
-def firestore_lesson_content(user_id, date):
-    agent = GoalGridAgent(user_id)
-    lesson = agent.get_lesson(date)
-    if lesson:
-        return jsonify(lesson)
-    else:
-        abort(404, description="Lesson not found")
-
-# ---------- Health Check ----------
-@app.route("/health", methods=["GET"])
-def health_check():
-    return jsonify({"status": "ok", "timestamp": datetime.now().isoformat()})
+@app.route("/all_users", methods=["GET"])
+def all_users():
+    agent = get_agent("dummy")  # Just to access the class method
+    users = agent.get_all_users()
+    return jsonify(users)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=5000)
