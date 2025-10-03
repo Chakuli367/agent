@@ -2,30 +2,50 @@ import os
 import json
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-from google.cloud import firestore
-from google.oauth2 import service_account
-from groq import Groq
-from models import Task, Lesson
+from dataclasses import dataclass, asdict
 
 # ===== FIRESTORE SETUP =====
-# Expecting RENDER_ENV variable FIRESTORE_CREDENTIALS_JSON (full JSON string)
-firestore_credentials_json = os.environ.get("FIRESTORE_CREDENTIALS_JSON")
-if not firestore_credentials_json:
-    raise Exception("FIRESTORE_CREDENTIALS_JSON not set in environment variables")
+from google.cloud import firestore
+from google.oauth2 import service_account
 
-credentials_info = json.loads(firestore_credentials_json)
-credentials = service_account.Credentials.from_service_account_info(credentials_info)
+SERVICE_ACCOUNT_PATH = os.environ.get("GOALGRID_SERVICE_ACCOUNT", "goalgrid.json")
+credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH)
 db = firestore.Client(credentials=credentials)
 
 # ===== GROQ SETUP =====
-# Expecting RENDER_ENV variable GROQ_API_KEY
-groq_api_key = os.environ.get("GROQ_API_KEY")
-if not groq_api_key:
-    raise Exception("GROQ_API_KEY not set in environment variables")
+from groq import Groq
+groq_client = Groq(api_key=os.environ.get("GSK_API_KEY"))
 
-groq_client = Groq(api_key=groq_api_key)
+# ===== DATA MODELS =====
+@dataclass
+class Task:
+    id: str
+    title: str
+    description: str
+    completed: bool
+    priority: int
+    created_at: str
+    due_date: Optional[str] = None
+    tags: List[str] = None
 
-# ===== AGENT CLASS =====
+    def to_dict(self):
+        return {k: v for k, v in asdict(self).items() if v is not None}
+
+@dataclass
+class Lesson:
+    date: str
+    title: str
+    content: str
+    tasks: List[Dict[str, Any]]
+    summary: str
+    motivation: str
+    quote: str
+    secret_hack: str
+    tiny_ritual: str
+    completed: bool = False
+    progress_percentage: int = 0
+
+# ===== AGENT =====
 class GoalGridAgent:
     def __init__(self, user_id: str):
         self.user_id = user_id
@@ -37,14 +57,15 @@ class GoalGridAgent:
         doc = self.user_ref.get()
         if doc.exists:
             return doc.to_dict()
-        default_data = {
-            'created_at': datetime.now().isoformat(),
-            'total_lessons_completed': 0,
-            'current_streak': 0,
-            'goals': []
-        }
-        self.user_ref.set(default_data)
-        return default_data
+        else:
+            default_data = {
+                'created_at': datetime.now().isoformat(),
+                'total_lessons_completed': 0,
+                'current_streak': 0,
+                'goals': []
+            }
+            self.user_ref.set(default_data)
+            return default_data
 
     def save_lesson(self, lesson: Lesson):
         self.lessons_ref.document(lesson.date).set(asdict(lesson), merge=True)
@@ -54,9 +75,9 @@ class GoalGridAgent:
         doc = self.lessons_ref.document(date).get()
         return doc.to_dict() if doc.exists else None
 
-    def get_all_users(self):
+    def get_all_users(self) -> List[str]:
         docs = db.collection('users').stream()
-        return [{d.id: d.to_dict()} for d in docs]
+        return [d.id for d in docs]
 
     # ---------- CONTENT GENERATION ----------
     def generate_personalized_content(self, context: Dict[str, Any]) -> Dict[str, str]:
@@ -84,6 +105,7 @@ Return JSON: lesson_title, lesson_content, summary, motivation, quote, secret_ha
                 content = content.split("```")[1].split("```")[0].strip()
             return json.loads(content)
         except:
+            # fallback content
             return {
                 "lesson_title": "Building Consistent Habits",
                 "lesson_content": "Focus on creating small, sustainable habits.",
@@ -131,16 +153,22 @@ Return JSON: lesson_title, lesson_content, summary, motivation, quote, secret_ha
     # ---------- AI-POWERED TASK REGENERATION ----------
     def regenerate_tasks_with_ai(self, date: str, difficulty_instructions: str = "Simplify these tasks for a beginner") -> bool:
         lesson_data = self.get_lesson(date)
-        if not lesson_data or not lesson_data.get("tasks"):
+        if not lesson_data:
+            print(f"No lesson found for {date}")
             return False
-
+        tasks = lesson_data.get("tasks", [])
+        if not tasks:
+            print(f"No tasks to regenerate for {date}")
+            return False
         try:
-            tasks_text = "\n".join([f"{t['title']}: {t['description']}" for t in lesson_data["tasks"]])
+            tasks_text = "\n".join([f"{t['title']}: {t['description']}" for t in tasks])
             prompt = f"""
-Rewrite these tasks for a user with the following instructions: {difficulty_instructions}
+You are a helpful life coach AI. Rewrite the following tasks for a user.
+Instructions: {difficulty_instructions}
 Tasks:
 {tasks_text}
-Return JSON list of tasks with 'title' and 'description'.
+
+Return JSON with the same structure: list of {{title, description}}.
 """
             response = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
@@ -151,13 +179,11 @@ Return JSON list of tasks with 'title' and 'description'.
                 temperature=0.7,
                 max_tokens=2000
             )
-
             content = response.choices[0].message.content.strip()
             if content.startswith("```json"):
                 content = content.split("```json")[1].split("```")[0].strip()
             elif content.startswith("```"):
                 content = content.split("```")[1].split("```")[0].strip()
-            
             new_tasks_list = json.loads(content)
             updated_tasks = []
             for i, t in enumerate(new_tasks_list, 1):
@@ -170,28 +196,37 @@ Return JSON list of tasks with 'title' and 'description'.
                     created_at=datetime.now().isoformat()
                 )
                 updated_tasks.append(updated_task.to_dict())
-
             lesson_data["tasks"] = updated_tasks
             self.lessons_ref.document(date).set(lesson_data, merge=True)
+            print(f"Lesson {date} tasks regenerated successfully using AI!")
             return True
         except Exception as e:
-            print(f"Error regenerating tasks: {e}")
+            print(f"Failed to regenerate tasks: {e}")
             return False
 
-    # ---------- SUMMARIZE TODAY'S TASKS USING AI ----------
-    def summarize_todays_tasks(self, date: str) -> str:
-        lesson_data = self.get_lesson(date)
-        if not lesson_data or not lesson_data.get("tasks"):
-            return "No tasks found for today."
+    # ---------- FETCH TODAY'S TASKS ----------
+    def fetch_todays_tasks(self) -> List[Dict[str, Any]]:
+        today_str = datetime.now().date().isoformat()
+        lesson_data = self.get_lesson(today_str)
+        if lesson_data and "tasks" in lesson_data:
+            return lesson_data["tasks"]
+        return []
 
-        tasks_text = "\n".join([f"- {t['title']}: {t['description']}" for t in lesson_data["tasks"]])
-        prompt = f"Summarize the following tasks in a concise, motivating way:\n{tasks_text}"
-
+    # ---------- SUMMARIZE TODAY'S TASKS ----------
+    def summarize_todays_tasks(self) -> str:
+        tasks = self.fetch_todays_tasks()
+        if not tasks:
+            return "No tasks for today."
+        tasks_text = "\n".join([f"{t['title']}: {t['description']}" for t in tasks])
+        prompt = f"""
+Summarize the following tasks concisely for a user in a motivating way:
+{tasks_text}
+"""
         try:
             response = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[
-                    {"role": "system", "content": "You are an expert life coach."},
+                    {"role": "system", "content": "You are an expert life coach. Respond concisely."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
@@ -199,6 +234,6 @@ Return JSON list of tasks with 'title' and 'description'.
             )
             summary = response.choices[0].message.content.strip()
             return summary
-        except Exception as e:
-            print(f"Error summarizing tasks: {e}")
-            return "Could not generate summary."
+        except:
+            return "You have tasks to complete today. Stay focused and motivated!"
+
