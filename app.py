@@ -40,11 +40,21 @@ def generate_tasks():
         return jsonify({"error": "Lesson not found"}), 404
 
     # Reconstruct Lesson object from saved data
-    lesson = agent.create_daily_lesson()  # placeholder for type
-    lesson.__dict__.update(lesson_data)
+    lesson = Lesson(
+        date=date,
+        title=lesson_data["title"],
+        lesson=lesson_data["lesson"],
+        summary=lesson_data["summary"],
+        motivation=lesson_data["motivation"],
+        quote=lesson_data["quote"],
+        secret_hacks_and_shortcuts=lesson_data["secret_hacks_and_shortcuts"],
+        tiny_daily_rituals_that_transform=lesson_data["tiny_daily_rituals_that_transform"],
+        visual_infographic_html=lesson_data["visual_infographic_html"],
+        tasks=[Task(t["title"], t["task"]["task"]) for t in lesson_data.get("tasks", [])]
+    )
+
     tasks = agent.generate_tasks_for_lesson(lesson, num_tasks)
     return jsonify({"message": "Tasks generated", "tasks": [t.to_dict() for t in tasks]})
-
 @app.route("/regenerate_tasks", methods=["POST"])
 def regenerate_tasks():
     data = request.get_json(force=True)
