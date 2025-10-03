@@ -1,0 +1,4 @@
+google-cloud-firestore==3.14.2
+google-auth==2.23.0
+groq==1.0.0  # Replace with actual latest version if different
+flask==2.3.4  # if you want to expose an API
