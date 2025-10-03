@@ -7,11 +7,14 @@ from google.oauth2 import service_account
 from groq import Groq
 
 # ===== FIRESTORE SETUP =====
-SERVICE_ACCOUNT_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-if not SERVICE_ACCOUNT_PATH:
-    raise ValueError("Environment variable GOOGLE_APPLICATION_CREDENTIALS is not set.")
-credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH)
-db = firestore.Client(credentials=credentials)
+SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+if not SERVICE_ACCOUNT_JSON:
+    raise ValueError("Environment variable GOOGLE_APPLICATION_CREDENTIALS_JSON is not set.")
+
+# Load credentials from JSON string in env var
+service_account_info = json.loads(SERVICE_ACCOUNT_JSON)
+credentials = service_account.Credentials.from_service_account_info(service_account_info)
+db = firestore.Client(credentials=credentials, project=service_account_info.get("project_id"))
 
 # ===== GROQ SETUP =====
 GROQ_API_KEY = os.environ.get("GSK_API_KEY")
