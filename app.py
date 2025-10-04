@@ -28,18 +28,15 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 class GoalGridAgent:
     def __init__(self, user_id: str):
         self.user_id = user_id
-        # Collection structure: users/<uid>/datedcourses/<randomdoc>
-        self.user_collection = db.collection("users").document(user_id).collection("datedcourses")
+        # Using the structure users/<uid>/datedcourses/<randomdoc>
+        self.user_doc_ref = db.collection("users").document(user_id).collection("datedcourses").limit(1)
 
     def _get_lessons(self):
-        # Fetch all datedcourses docs and merge their lessons_by_date
-        lessons_by_date = {}
-        docs = self.user_collection.stream()
+        docs = self.user_doc_ref.stream()
         for doc in docs:
             data = doc.to_dict()
-            if "lessons_by_date" in data:
-                lessons_by_date.update(data["lessons_by_date"])
-        return lessons_by_date
+            return data.get("lessons_by_date", {})
+        return {}
 
     def get_todays_tasks(self, date: str = None):
         lessons = self._get_lessons()
@@ -48,15 +45,8 @@ class GoalGridAgent:
         lesson_data = lessons.get(date)
         if not lesson_data or not lesson_data.get("tasks"):
             return []
-
-        tasks_list = lesson_data.get("tasks", [])
-        tasks = []
-        for t in tasks_list:
-            if isinstance(t, dict):
-                tasks.append(t.get("task", {}).get("task", ""))
-            elif isinstance(t, str):
-                tasks.append(t)
-        return tasks
+        # Each task is a dict: {"done": bool, "task": str}
+        return [t["task"] for t in lesson_data["tasks"]]
 
     def summarize_todays_lesson(self, date: str = None):
         lessons = self._get_lessons()
@@ -77,7 +67,7 @@ class GoalGridAgent:
             return False
 
         try:
-            tasks_text = "\n".join([t["task"]["task"] if isinstance(t, dict) else t for t in lesson_data["tasks"]])
+            tasks_text = "\n".join([t["task"] for t in lesson_data["tasks"]])
             prompt = f"""
 You are a helpful life coach AI. Rewrite the following tasks for a user.
 Instructions: {difficulty_instructions}
@@ -103,18 +93,19 @@ Return JSON as list of tasks with 'title' and 'description'.
                 content = content.split("```")[1].split("```")[0].strip()
 
             new_tasks_list = json.loads(content)
-            updated_tasks = [{"task": {"task": t.get("title", t.get("description", ""))}, "done": False} for t in new_tasks_list]
+            # Save tasks in the same Firestore structure
+            updated_tasks = [{"task": t.get("title", t.get("description", "")), "done": False} for t in new_tasks_list]
 
-            # Update the first document in datedcourses (simplest approach)
-            docs = list(self.user_collection.stream())
-            if docs:
-                doc_ref = self.user_collection.document(docs[0].id)
-                doc_ref.update({"lessons_by_date."+date: {**lesson_data, "tasks": updated_tasks}})
-                print(f"Tasks for {date} regenerated successfully!")
-                return True
-            else:
-                print("No datedcourses document found to update tasks.")
-                return False
+            # Update Firestore
+            docs = self.user_doc_ref.stream()
+            for doc in docs:
+                doc_ref = db.collection("users").document(self.user_id).collection("datedcourses").document(doc.id)
+                lesson_data["tasks"] = updated_tasks
+                doc_ref.update({"lessons_by_date."+date: lesson_data})
+                break
+
+            print(f"Tasks for {date} regenerated successfully!")
+            return True
         except Exception as e:
             print(f"Failed to regenerate tasks: {e}")
             return False
