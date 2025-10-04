@@ -28,13 +28,19 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 class GoalGridAgent:
     def __init__(self, user_id: str):
         self.user_id = user_id
-        self.course_doc = db.collection("datedcourses").document(user_id)
+        self.user_doc = db.collection("users").document(user_id)
 
     def _get_lessons(self):
-        doc = self.course_doc.get()
-        if doc.exists:
-            return doc.to_dict().get("lessons_by_date", {})
-        return {}
+        # Query the datedcourses subcollection
+        datedcourses_ref = self.user_doc.collection("datedcourses")
+        docs = datedcourses_ref.stream()
+        lessons_by_date = {}
+        for doc in docs:
+            data = doc.to_dict()
+            if "lessons_by_date" in data:
+                # Merge lessons from all documents if multiple exist
+                lessons_by_date.update(data["lessons_by_date"])
+        return lessons_by_date
 
     def get_todays_tasks(self, date: str = None):
         lessons = self._get_lessons()
@@ -92,8 +98,15 @@ Return JSON as list of tasks with 'title' and 'description'.
             new_tasks_list = json.loads(content)
             updated_tasks = [{"task": {"task": t.get("title", t.get("description", ""))}, "done": False} for t in new_tasks_list]
 
+            # Update the first datedcourses document
+            datedcourses_ref = self.user_doc.collection("datedcourses")
+            docs = list(datedcourses_ref.stream())
+            if not docs:
+                print(f"No datedcourses document found for user {self.user_id}")
+                return False
+            first_doc_ref = docs[0].reference
             lesson_data["tasks"] = updated_tasks
-            self.course_doc.update({"lessons_by_date."+date: lesson_data})
+            first_doc_ref.update({"lessons_by_date."+date: lesson_data})
             print(f"Tasks for {date} regenerated successfully!")
             return True
         except Exception as e:
