@@ -1,37 +1,139 @@
+import os
+import json
+from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from goalgrid_agent import GoalGridAgent
+from google.oauth2 import service_account
+from google.cloud import firestore
+from groq import Groq
 
+# ===== FIRESTORE SETUP =====
+SERVICE_ACCOUNT_JSON = os.environ.get("GOALGRID_SA_JSON")
+if not SERVICE_ACCOUNT_JSON:
+    raise ValueError("Environment variable GOALGRID_SA_JSON is not set!")
+
+credentials = service_account.Credentials.from_service_account_info(
+    json.loads(SERVICE_ACCOUNT_JSON)
+)
+
+db = firestore.Client(credentials=credentials, project=credentials.project_id)
+
+# ===== GROQ SETUP =====
+GROQ_API_KEY = os.environ.get("GSK_API_KEY")
+if not GROQ_API_KEY:
+    raise ValueError("Environment variable GSK_API_KEY is not set.")
+groq_client = Groq(api_key=GROQ_API_KEY)
+
+# ===== AGENT =====
+class GoalGridAgent:
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+        self.course_doc = db.collection("datedcourses").document(user_id)
+
+    def _get_lessons(self):
+        doc = self.course_doc.get()
+        if doc.exists:
+            return doc.to_dict().get("lessons_by_date", {})
+        return {}
+
+    def get_todays_tasks(self, date: str = None):
+        lessons = self._get_lessons()
+        if not date:
+            date = datetime.now().date().isoformat()
+        lesson_data = lessons.get(date)
+        if not lesson_data:
+            return []
+        return [t["task"]["task"] for t in lesson_data.get("tasks", [])]
+
+    def summarize_todays_lesson(self, date: str = None):
+        lessons = self._get_lessons()
+        if not date:
+            date = datetime.now().date().isoformat()
+        lesson_data = lessons.get(date)
+        if not lesson_data:
+            return None
+        return lesson_data.get("summary")
+
+    def regenerate_tasks_with_ai(self, difficulty_instructions: str = "Simplify these tasks for a beginner", date: str = None) -> bool:
+        lessons = self._get_lessons()
+        if not date:
+            date = datetime.now().date().isoformat()
+        lesson_data = lessons.get(date)
+        if not lesson_data or not lesson_data.get("tasks"):
+            print(f"No tasks found for {date}")
+            return False
+
+        try:
+            tasks_text = "\n".join([t["task"]["task"] for t in lesson_data["tasks"]])
+            prompt = f"""
+You are a helpful life coach AI. Rewrite the following tasks for a user.
+Instructions: {difficulty_instructions}
+Tasks:
+{tasks_text}
+
+Return JSON as list of tasks with 'title' and 'description'.
+"""
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": "You are an expert life coach. Respond only in JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=2000
+            )
+
+            content = response.choices[0].message.content.strip()
+            if content.startswith("```json"):
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif content.startswith("```"):
+                content = content.split("```")[1].split("```")[0].strip()
+
+            new_tasks_list = json.loads(content)
+            updated_tasks = [{"task": {"task": t.get("title", t.get("description", ""))}, "done": False} for t in new_tasks_list]
+
+            lesson_data["tasks"] = updated_tasks
+            self.course_doc.update({"lessons_by_date."+date: lesson_data})
+            print(f"Tasks for {date} regenerated successfully!")
+            return True
+        except Exception as e:
+            print(f"Failed to regenerate tasks: {e}")
+            return False
+
+# ===== FLASK APP =====
 app = Flask(__name__)
 CORS(app)
 
 @app.route("/todays_tasks", methods=["GET"])
 def todays_tasks():
     user_id = request.args.get("user_id")
+    date = request.args.get("date")
     if not user_id:
         return jsonify({"success": False, "message": "Missing user_id parameter"}), 400
 
     agent = GoalGridAgent(user_id)
-    tasks = agent.get_todays_tasks()
+    tasks = agent.get_todays_tasks(date)
     if not tasks:
-        return jsonify({"success": False, "tasks": [], "message": "No tasks found for today"}), 404
+        return jsonify({"success": False, "tasks": [], "message": "No tasks found for this date"}), 404
     return jsonify({"success": True, "tasks": tasks})
 
 @app.route("/summarize_lesson", methods=["GET"])
 def summarize_lesson():
     user_id = request.args.get("user_id")
+    date = request.args.get("date")
     if not user_id:
         return jsonify({"success": False, "message": "Missing user_id parameter"}), 400
 
     agent = GoalGridAgent(user_id)
-    summary = agent.summarize_todays_lesson()
+    summary = agent.summarize_todays_lesson(date)
     if not summary:
-        return jsonify({"success": False, "summary": "", "message": "No lesson found for today"}), 404
+        return jsonify({"success": False, "summary": "", "message": "No lesson found for this date"}), 404
     return jsonify({"success": True, "summary": summary})
 
 @app.route("/generate_tasks", methods=["POST"])
 def generate_tasks():
     user_id = request.args.get("user_id")
+    date = request.args.get("date")
     if not user_id:
         return jsonify({"success": False, "message": "Missing user_id parameter"}), 400
 
@@ -39,7 +141,7 @@ def generate_tasks():
     instructions = data.get("difficulty_instructions", "Simplify these tasks for a beginner")
 
     agent = GoalGridAgent(user_id)
-    success = agent.regenerate_tasks_with_ai(instructions)
+    success = agent.regenerate_tasks_with_ai(instructions, date)
     return jsonify({"success": success})
 
 if __name__ == "__main__":
